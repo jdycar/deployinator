@@ -29,6 +29,7 @@ module Deployinator
       @deploy_start_time = Time.now.to_i
       @start_time = Time.now.to_i
       @username = args[:username]
+      @groups = args[:groups]
       @host     = `hostname -s`
       @stack = args[:stack]
       @method = args[:method]
@@ -37,7 +38,7 @@ module Deployinator
 
       # This gets the runlog output on the console; is used by log_and_stream
       @block = args[:block] || Proc.new do |output|
-        $stdout.write output.gsub!(/(<[^>]*>)|\n|\t/s) {" "}
+        $stdout.write output.gsub!(/(<[^>]*>)|\n|\t/m) {" "}
         $stdout.write "\n"
       end
     end
@@ -102,7 +103,11 @@ module Deployinator
       deploy_instance = deploy_class.new(options)
       deploy_instance.register_plugins(options[:stack])
 
-      deploy_instance.lock_pushes(options[:stack], options[:username], options[:method])
+      locked = deploy_instance.lock_pushes(options[:stack], options[:username], options[:method])
+
+      unless locked
+        return deploy_instance
+      end
 
       @start_time = Time.now
       deploy_instance.log_and_stream "Push started at #{@start_time.to_i}\n"

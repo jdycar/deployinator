@@ -413,11 +413,13 @@ module Deployinator
     def lock_pushes(stack, who, method)
       log_and_stream("LOCKING #{stack}<br>")
       if lock_info = push_lock_info(stack)
-        return log_and_stream("Pushes locked by #{lock_info[:who]} - #{lock_info[:method]}<br>")
+        log_and_stream("Pushes locked by #{lock_info[:who]} - #{lock_info[:method]}<br>")
+        return false
       end
 
       dt = Time.now.strftime("%m/%d/%Y %H:%M")
       log_string_to_file("#{who}|#{method}|#{dt}", push_lock_path(stack))
+      return true
     end
 
     def unlock_pushes(stack)
@@ -464,16 +466,19 @@ module Deployinator
 
     # Public: wrap a block into a timeout
     #
-    # seconds     - timeout in seconds
-    # description - optional description for logging (default:"")
-    # &block      - block to call
+    # seconds         - timeout in seconds
+    # description     - optional description for logging (default:"")
+    # throw_exception - options param to throw exception back up stack
+    # quiet           - optional boolean for logging as a big red warning using the stderr div class
+    # extra_opts      - optional hash to pass along to plugins
+    # &block          - block to call
     #
     # Example
     #   with_timeout(20){system("curl -s http://google.com")}
     #   with_timeout 30 do; system("curl -s http://google.com"); end
     #
     # Returns nothing
-    def with_timeout(seconds, description=nil, throw_exception=false, &block)
+    def with_timeout(seconds, description=nil, throw_exception=false, quiet=false, extra_opts={}, &block)
       begin
         Timeout.timeout(seconds) do
           yield
@@ -483,11 +488,17 @@ module Deployinator
         info += " for #{description}" unless description.nil?
         # log and stream if log filename is not undefined
         if (/undefined/ =~ @filename).nil?
-          log_and_stream "<div class=\"stderr\">#{info}</div>"
+          if quiet
+            log_and_stream "#{info}<br>"
+          else
+            log_and_stream "<div class=\"stderr\">#{info}</div>"
+          end
         end
         state = {
           :seconds => seconds,
-          :info => info
+          :info => info,
+          :stack => stack,
+          :extra_opts => extra_opts
         }
         raise_event(:timeout, state)
         if throw_exception
@@ -643,7 +654,24 @@ module Deployinator
       log_msg = e.nil? ? msg : "#{msg} (#{e.message})"
       log_and_stream "<div class=\"stderr\">#{log_msg}</div>"
       if !e.nil?
-        log_and_stream e.backtrace.inspect
+        begin
+          template = open("#{File.dirname(__FILE__)}/templates/exception.mustache").read
+
+          regex = /(?<file>.*?):(?<line>\d+):.*?`(?<method>.*)'/
+          context = e.backtrace.map do |line|
+            match = regex.match(line)
+            {
+              :file => match['file'],
+              :line => match['line'],
+              :method => match['method']
+            }
+          end
+
+          output = Mustache.render(template, {:exceptions => context})
+          log_and_stream output
+        rescue
+          log_and_stream e.backtrace.inspect
+        end
       end
       # This is so we have something in the log if/when this fails
       puts log_msg
